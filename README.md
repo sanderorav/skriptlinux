@@ -1,22 +1,22 @@
 # This is a readme
 
 ## 54541010
-Võsapets, Võsapets,
-sa oled täitsa maladets!
-Selliseid ei leidu teisi
-kusagil siin ilma peal.
-
-Sõber kopsikusse kusi,
-küll on hea see naabrile.
-Läbi seina tuleb vingu,
-sest ahi tossu sisse ajab.
-
-Sitamaja ukse ees
-üks kotkas ründas naabrimeest.
-Mis see koer sel kassil tegi,
-et ta kopsikusse kusi?
-
-Tartu linnas ühes urkas
-kord elasid kaks joodikut.
-Kuidas nad küll elavad, ei tea,
+Võsapets, Võsapets,<br>
+sa oled täitsa maladets!<br>
+Selliseid ei leidu teisi<br>
+kusagil siin ilma peal.<br>
+<br>
+Sõber kopsikusse kusi,<br>
+küll on hea see naabrile.<br>
+Läbi seina tuleb vingu,<br>
+sest ahi tossu sisse ajab.<br>
+<br>
+Sitamaja ukse ees<br>
+üks kotkas ründas naabrimeest.<br>
+Mis see koer sel kassil tegi,<br>
+et ta kopsikusse kusi?<br>
+<br>
+Tartu linnas ühes urkas<br>
+kord elasid kaks joodikut.<br>
+Kuidas nad küll elavad, ei tea,<br>
 kui kusehais käib üle pea.
