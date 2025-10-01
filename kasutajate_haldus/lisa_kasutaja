@@ -1,0 +1,68 @@
+#!/bin/bash
+
+# lisa_kasutaja - see skript loob ilma paroolita kasutaja ja tema kodukataloogi /home/<kasutajanimi>
+# Skripti käivitamiseks sisesta: sudo /tee/skriptini/lisa_kasutaja <kasutajanimi>
+
+set -euo pipefail
+
+if [[ $EUID -ne 0 ]]; then
+  echo "Viga: see skript tuleb käivitada rootina (kasuta sudo)." >&2
+  exit 1
+fi
+
+if [[ $# -ne 1 ]]; then
+  echo "Kasutus: $0 <kasutajanimi>" >&2
+  exit 2
+fi
+
+USERNAME="$1"
+SKEL="/etc/skel"
+HOMEDIR="/home/${USERNAME}"
+SHELL="/bin/bash"
+
+# lihtne valideerimine kasutajanimele (võib kohandada)
+if [[ ! "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+  echo "Viga: kasutajanimi sisaldab kehtetuid märke. Lubatud: a-z, 0-9, -, _ ja algus tähega või _" >&2
+  exit 3
+fi
+
+# kas juba olemas?
+if id "$USERNAME" &>/dev/null; then
+  echo "Info: kasutaja '$USERNAME' on juba olemas." >&2
+  exit 4
+fi
+
+# loo kasutaja koos kodukataloogiga ja kopeeri /etc/skel sisu
+# -m loob home kataloogi
+# -k määrab skel katalogi (tavaliselt /etc/skel)
+# -s määrab shelli
+useradd -m -k "$SKEL" -s "$SHELL" "$USERNAME"
+
+# eemalda/parooli tühjenda nii, et pole setitud parooli
+# passwd -d eemaldab krüpteeritud parooli välja. 
+# Lisaks lukustame parooli nii et ei saa parooliga sisse logida:
+passwd -d "$USERNAME" >/dev/null 2>&1 || true
+passwd -l "$USERNAME" >/dev/null 2>&1 || true
+
+# kinnista omandiõigused ja õigused kodukataloogil
+if [[ -d "$HOMEDIR" ]]; then
+  chown -R "$USERNAME":"$USERNAME" "$HOMEDIR"
+  find "$HOMEDIR" -type d -exec chmod 755 {} \;  # kataloogid 755 (vajadusel muuda)
+  # kui soovid .ssh kataloogi tekitamisel rangemaid õigusi
+  if [[ -d "$HOMEDIR/.ssh" ]]; then
+    chmod 700 "$HOMEDIR/.ssh"
+    chown "$USERNAME":"$USERNAME" "$HOMEDIR/.ssh"
+    find "$HOMEDIR/.ssh" -type f -exec chmod 600 {} \;
+  fi
+else
+  echo "Hoiatus: kodukataloogi $HOMEDIR ei leitud pärast useradd." >&2
+fi
+
+echo "Kasutaja '$USERNAME' loodud (parool puudub / lukustatud)."
+echo "Kodukataloog: $HOMEDIR"
+echo
+echo "Kontrolli soovitused:"
+echo " - Kontrolli /etc/passwd:  grep '^${USERNAME}:' /etc/passwd"
+echo " - Kontrolli /etc/shadow:  sudo grep '^${USERNAME}:' /etc/shadow"
+echo " - Kontrolli /etc/group:   grep -E '(^|:).*${USERNAME}' /etc/group || true"
+echo " - Vaata kodukataloogi:   ls -la $HOMEDIR"
