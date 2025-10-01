@@ -16,6 +16,11 @@ Sitamaja ukse ees<br>
 Mis see koer sel kassil tegi,<br>
 et ta kopsikusse kusi?<br>
 <br>
+Metsa ääres väike maja,<br>
+selles majas kaksikud.<br>
+Naabrid magada ei saa,<br>
+sest muusika neil mängib seal.<br>
+<br>
 Tartu linnas ühes urkas<br>
 kord elasid kaks joodikut.<br>
 Kuidas nad küll elavad, ei tea,<br>
