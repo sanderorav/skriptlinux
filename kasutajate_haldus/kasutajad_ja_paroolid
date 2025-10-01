@@ -1,0 +1,140 @@
+#!/bin/bash
+
+# kasutajad_ja_paroolid - loob kasutajad kahe faili alusel (kasutajanimed + paroolid)
+# Kasutamine: sudo ./kasutajad_ja_paroolid <kasutajad.txt> <paroolid.txt>
+# Nõuded:
+#  - käivita rootina (või sudo)
+#  - kasutajate fail: iga rida on kasutajanimi
+#  - paroolide fail: iga rida on vastava kasutaja parool avatekstina
+#  - /etc/skel peab sisaldama vaikimisi peidetud failide struktuuri
+
+set -euo pipefail
+
+# ---------- Abifunktsioonid ----------
+err() { echo "Viga: $*" >&2; }
+info() { echo "[*] $*"; }
+
+require_root() {
+  if [[ $EUID -ne 0 ]]; then
+    err "skript tuleb käivitada root-õigustes (kasuta sudo)."
+    exit 1
+  fi
+}
+
+require_cmd() {
+  local c; for c in "$@"; do
+    if ! command -v "$c" >/dev/null 2>&1; then
+      err "vajalik käsk puudub: $c"
+      exit 2
+    fi
+  done
+}
+
+trim() {
+  # kasutus: TRIMMED=$(trim "$VAR")
+  local s="$1"
+  # eemalda alguse/lõpu whitespace
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+valid_username() {
+  # lubame: algab tähe või _ -ga; edasi tähed, numbrid, -, _
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]*$ ]]
+}
+
+ensure_home_permissions() {
+  local user="$1" home="/home/$1"
+  if [[ -d "$home" ]]; then
+    chown -R "$user":"$user" "$home"
+    find "$home" -type d -exec chmod 755 {} \; || true
+    # karmistame .ssh kui olemas
+    if [[ -d "$home/.ssh" ]]; then
+      chmod 700 "$home/.ssh"
+      chown "$user":"$user" "$home/.ssh"
+      find "$home/.ssh" -type f -exec chmod 600 {} \; || true
+    fi
+  fi
+}
+
+# ---------- Kontrollid ----------
+require_root
+
+if [[ $# -ne 2 ]]; then
+  err "Kasutamine: $0 <kasutajad.txt> <paroolid.txt>"
+  exit 3
+fi
+
+USERS_FILE="$1"
+PASS_FILE="$2"
+
+[[ -f "$USERS_FILE" ]] || { err "faili '$USERS_FILE' ei leitud"; exit 4; }
+[[ -f "$PASS_FILE"  ]] || { err "faili '$PASS_FILE' ei leitud";  exit 4; }
+
+require_cmd useradd chpasswd passwd grep awk sed getent
+
+SKEL="/etc/skel"
+[[ -d "$SKEL" ]] || { err "$SKEL puudub (vajalik peidetud failide struktuuri jaoks)"; exit 5; }
+
+# ---------- Loeme failid massiividesse ----------
+# Jätame tühjad read ja kommentaarid (# ...) vahele.
+mapfile -t USERS < <(sed -e 's/\r$//' "$USERS_FILE" | awk '!/^[[:space:]]*($|#)/{print}')
+mapfile -t PASSWDS < <(sed -e 's/\r$//' "$PASS_FILE"  | awk '!/^[[:space:]]*($|#)/{print}')
+
+if [[ ${#USERS[@]} -eq 0 ]]; then
+  err "kasutajate nimekiri on tühi pärast tühjade ridade/kommentaaride eemaldamist"
+  exit 6
+fi
+
+if [[ ${#USERS[@]} -ne ${#PASSWDS[@]} ]]; then
+  err "ridade arv ei klapi: kasutajad=${#USERS[@]}, paroolid=${#PASSWDS[@]}"
+  err "iga kasutajale peab vastama üks parool (rea-kaupa)."
+  exit 7
+fi
+
+info "Töötlen ${#USERS[@]} kasutajat..."
+
+# ---------- Põhitsükkel ----------
+for i in "${!USERS[@]}"; do
+  USERNAME="$(trim "${USERS[$i]}")"
+  PASSWORD="$(trim "${PASSWDS[$i]}")"
+
+  if [[ -z "$USERNAME" ]]; then
+    err "tühi kasutajanimi reas $((i+1)) — jätan vahele"
+    continue
+  fi
+  if ! valid_username "$USERNAME"; then
+    err "kehtetu kasutajanimi '${USERNAME}' reas $((i+1)); lubatud: a-z, 0-9, -, _, algus tähega või _"
+    continue
+  fi
+
+  info "Kasutaja: ${USERNAME}"
+
+  # kas kasutaja juba olemas?
+  if getent passwd "$USERNAME" >/dev/null 2>&1; then
+    info " - olemas; jätan loomise vahele, uuendan parooli"
+  else
+    # loo kasutaja koos /home/<user> ja skeliga
+    useradd -m -k "$SKEL" -s /bin/bash "$USERNAME"
+    info " - loodud ja kodukataloog kopeeritud /etc/skel põhjal"
+  fi
+
+  # seadista parool (kirjutab /etc/shadow räsivälja)
+  if printf '%s:%s\n' "$USERNAME" "$PASSWORD" | chpasswd; then
+    # veendu, et konto poleks lukus
+    passwd -u "$USERNAME" >/dev/null 2>&1 || true
+    info " - parool seadistatud"
+  else
+    err " - parooli seadmine ebaõnnestus"
+  fi
+
+  # omandiõigused/õigused
+  ensure_home_permissions "$USERNAME"
+done
+
+echo
+info "Valmis. Kontrolli näited:"
+echo "  grep '^\$(printf %q \"${USERS[0]}\"):' /etc/passwd"
+echo "  sudo grep '^\$(printf %q \"${USERS[0]}\"):' /etc/shadow"
+echo "  ls -la /home/${USERS[0]}"
