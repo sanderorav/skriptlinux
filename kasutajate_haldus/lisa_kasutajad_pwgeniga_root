@@ -1,0 +1,237 @@
+#!/bin/bash
+
+# lisa_kasutajad_pwgeniga_root
+# Kasutamine: root kasutaja alt ./lisa_kasutajad_genparooliga <kasutajanimedega fail>
+#
+# Iga rida failis = üks kasutajanimi. Skript genereerib iga kasutaja jaoks parooli,
+# loob kasutaja (useradd -m -k /etc/skel -s /bin/bash), seab parooli ja salvestab
+# kasutaja:parool kirje logifaili (vaikimisi /root/kasutajad_paroolid.log).
+#
+# Kõik vajalik on antud faili sees — ei kutsuta eraldi skripte.
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# ---------------- Strict: only direct root login (no sudo) ----------------
+# Must be executed by root account *directly* (not via sudo).
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "Viga: see skript tuleb käivitada root-kasutajana." >&2
+  exit 1
+fi
+
+# If SUDO_USER or SUDO_UID is set, the caller used sudo -> refuse.
+if [[ -n "${SUDO_USER-}" || -n "${SUDO_UID-}" ]]; then
+  echo "Viga: sudo ei ole lubatud. Logi sisse otse root-kasutajana (näiteks 'su -')." >&2
+  exit 1
+fi
+
+# Also refuse common other escalation env markers (pkexec)
+if [[ -n "${PKEXEC_UID-}" || -n "${PKEXEC_ASSUME_USER-}" ]]; then
+  echo "Viga: käivitamine polkit/pkexec kaudu ei ole lubatud." >&2
+  exit 1
+fi
+
+# Extra check: if the real username is not 'root' (best-effort)
+# (id -run may not exist everywhere; test only if id supports -r -n)
+if id -run &>/dev/null; then
+  if [[ "$(id -run)" != "root" ]]; then
+    echo "Viga: skripti tohib käivitada ainult root-kasutajana (sudo ei ole lubatud)." >&2
+    exit 1
+  fi
+fi
+# -----------------------------------------------------------------------
+
+# --- konfiguratsioon ---
+DEFAULT_LOG="/root/kasutajad_paroolid.log"
+PASS_LEN=14    # parooli pikkus (mitte liiga lühike)
+SHELL="/bin/bash"
+SKEL="/etc/skel"
+
+# --- abifunktsioonid ---
+err(){ echo "Viga: $*" >&2; }
+info(){ echo "[*] $*"; }
+
+require_root(){
+  if [[ $EUID -ne 0 ]]; then
+    err "Skript tuleb käivitada rootina (kasuta sudo)."
+    exit 1
+  fi
+}
+
+require_cmds(){
+  local missing=()
+  for c in "$@"; do
+    if ! command -v "$c" >/dev/null 2>&1; then
+      missing+=("$c")
+    fi
+  done
+  if [[ ${#missing[@]} -ne 0 ]]; then
+    # mitte kõiki käske pole tarvis — me lubame fallback'i, aga teavitame kui chpasswd/useradd puudub
+    echo "Hoiatus: puuduvad käsud: ${missing[*]}" >&2
+  fi
+}
+
+trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
+
+valid_username(){
+  # lihtne valideerimine: algab tähega või _, edasi a-z0-9_- (lowercase)
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]*$ ]]
+}
+
+# Funktsioon parooli genereerimiseks: proovib pwgen, siis openssl, siis /dev/urandom
+gen_password(){
+  local len="$1"
+  # esimene valik: pwgen (mõistlik kui installitud)
+  if command -v pwgen >/dev/null 2>&1; then
+    # -s = secure, -1 = üks password per rida
+    pwgen -s -1 "$len" 2>/dev/null && return 0
+  fi
+
+  # teine valik: openssl rand -> base64, trunki tee sobiva pikkusega
+  if command -v openssl >/dev/null 2>&1; then
+    # genereerime piisava hulga baite ja lõikame
+    local pass
+    pass="$(openssl rand -base64 $(( (len*3+3)/4 )) 2>/dev/null | tr -d '\n' | cut -c1-"$len")" || true
+    if [[ -n "$pass" ]]; then printf '%s' "$pass"; return 0; fi
+  fi
+
+  # viimane: /dev/urandom + tr filter
+  local pass
+  pass="$(tr -dc 'A-Za-z0-9@%+/,=()!?-_' < /dev/urandom | head -c "$len" || true)"
+  if [[ -n "$pass" ]]; then printf '%s' "$pass"; return 0; fi
+
+  # kui kõik ebaõnnestub, tagasta tühi string ja caller käsitleb vea
+  return 1
+}
+
+ensure_home_permissions(){
+  local user="$1" home="/home/$1"
+  if [[ -d "$home" ]]; then
+    chown -R "$user":"$user" "$home" || true
+    find "$home" -type d -exec chmod 755 {} \; || true
+    if [[ -d "$home/.ssh" ]]; then
+      chmod 700 "$home/.ssh" || true
+      chown "$user":"$user" "$home/.ssh" || true
+      find "$home/.ssh" -type f -exec chmod 600 {} \; || true
+    fi
+  fi
+}
+
+# --- algkontrollid ---
+require_root
+
+if [[ $# -ne 1 ]]; then
+  err "Kasutamine: $0 <kasutajad_fail>"
+  exit 2
+fi
+
+USERS_FILE="$1"
+
+if [[ ! -f "$USERS_FILE" ]]; then
+  err "Faili '$USERS_FILE' ei leitud."
+  exit 3
+fi
+
+if [[ ! -d "$SKEL" ]]; then
+  err "Skel kataloog '$SKEL' puudub — soovitatav, et kodukataloogide skelett oleks olemas."
+  # me jätkame siiski — useradd -m võib olla ilma skelita ja luua tühja home
+fi
+
+# Kontrollime, et vajalikud põhikäsud olemas
+# useradd ja chpasswd on vajalikud; kui puuduvad, lõpetame
+for need in useradd chpasswd; do
+  if ! command -v "$need" >/dev/null 2>&1; then
+    err "Süsteemis puudub vajalik käsk: $need — paigalda see enne skripti jooksutamist."
+    exit 4
+  fi
+done
+
+# Logifail
+LOGFILE="$DEFAULT_LOG"
+touch "$LOGFILE"
+chmod 600 "$LOGFILE"
+
+info "Loen kasutajate faili: $USERS_FILE"
+info "Logifail: $LOGFILE"
+
+# --- Töötle faili rea-põhiselt ---
+line_no=0
+while IFS= read -r RAWLINE || [[ -n "$RAWLINE" ]]; do
+  line_no=$((line_no+1))
+
+  # trim
+  LINE="$(trim "$RAWLINE")"
+  # ignore empty & comment lines
+  [[ -z "$LINE" ]] && continue
+  [[ "$LINE" =~ ^# ]] && continue
+
+  # nüüd on LINE kasutajanimi
+  USERNAME="$LINE"
+
+  # valideeri kasutajanimi
+  if [[ -z "$USERNAME" ]]; then
+    err "Rea $line_no: tühi kasutajanimi — vahele jäetud"
+    continue
+  fi
+  # muuda väiketähtedeks (soovituslik); kui soovid seda mitte teha, eemalda järgmine rida
+  USERNAME_LOWER="$(echo "$USERNAME" | tr 'A-Z' 'a-z')"
+  USERNAME="$USERNAME_LOWER"
+
+  if ! valid_username "$USERNAME"; then
+    err "Rea $line_no: kehtetu kasutajanimi '$USERNAME' — lubatud: a-z, 0-9, -, _, algus tähe või _ ; vahele jäetud"
+    continue
+  fi
+
+  info "[$line_no] Töötlen: $USERNAME"
+
+  # kui kasutaja juba olemas -> uuendame parooli; muidu loome
+  if getent passwd "$USERNAME" >/dev/null 2>&1; then
+    info " - kasutaja olemas; uuendan parooli"
+    # genereeri parool
+    PASSWORD="$(gen_password "$PASS_LEN")" || { err "parooli genereerimine ebaõnnestus"; continue; }
+    # sea parool
+    if printf '%s:%s\n' "$USERNAME" "$PASSWORD" | chpasswd; then
+      passwd -u "$USERNAME" >/dev/null 2>&1 || true
+      info " - parool uuendatud"
+      # logi
+      printf '%s:%s\n' "$USERNAME" "$PASSWORD" >> "$LOGFILE"
+    else
+      err " - parooli seadmine ebaõnnestus kasutajale $USERNAME"
+      continue
+    fi
+  else
+    # loo uus kasutaja
+    useradd -m -k "$SKEL" -s "$SHELL" "$USERNAME" || { err "useradd ebaõnnestus kasutajale $USERNAME"; continue; }
+    info " - kasutaja loodud, home tehtud"
+
+    # genereeri parool
+    PASSWORD="$(gen_password "$PASS_LEN")" || { err "parooli genereerimine ebaõnnestus"; continue; }
+
+    # sea parool
+    if printf '%s:%s\n' "$USERNAME" "$PASSWORD" | chpasswd; then
+      passwd -u "$USERNAME" >/dev/null 2>&1 || true
+      info " - parool seadistatud"
+      # parooli sundimise seadistamine esimesel sisselogimisel muutmiseks (valikuline)
+      # chage -d 0 "$USERNAME" || true
+      # logi kasutaja:parool
+      printf '%s:%s\n' "$USERNAME" "$PASSWORD" >> "$LOGFILE"
+    else
+      err " - parooli seadmine ebaõnnestus kasutajale $USERNAME"
+      # võib eemaldada äsja loodud kasutaja, kuid jätame selle käsitlemiseks administraatorile
+      continue
+    fi
+  fi
+
+  # tagame home õigused ja .ssh õigused kui vajalik
+  ensure_home_permissions "$USERNAME"
+
+done < "$USERS_FILE"
+
+info "Kõik read töödeldud. Logifail: $LOGFILE (õigused 600)"
+
+# Kui soovid, võid välja trükkida kokkuvõtte:
+echo
+info "Näidis logi esimesest read:"
+head -n 20 "$LOGFILE" || true
+
+exit 0
