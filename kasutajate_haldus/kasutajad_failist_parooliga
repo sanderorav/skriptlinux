@@ -1,0 +1,82 @@
+#!/bin/bash
+
+# kasutajad_failist_parooliga - loeb etteantud failist kasutajanimed või kasutajanimi:parool read
+# ja loob need kasutajad, kutsudes lisa_kasutaja skripti.
+# Kui parool on ette antud, seadistab selle chpasswd abil ja avab konto (passwd -u).
+
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "Kasutamine: $0 <failinimi>" >&2
+  exit 1
+fi
+
+FILE="$1"
+
+if [[ ! -f "$FILE" ]]; then
+  echo "Viga: faili '$FILE' ei leitud!" >&2
+  exit 2
+fi
+
+# Kontrolli, et lisa_kasutaja on kättesaadav praeguses kataloogis
+if ! command -v ./lisa_kasutaja >/dev/null 2>&1; then
+  echo "Viga: skripti 'lisa_kasutaja' ei leitud praegusest kataloogist." >&2
+  exit 3
+fi
+
+# Kontrolli, et chpasswd olemas (parooli seadistamiseks)
+if ! command -v chpasswd >/dev/null 2>&1; then
+  echo "Viga: 'chpasswd' käsk puudub süsteemist." >&2
+  exit 4
+fi
+
+# Faili töötlemine
+# Toetab:
+#   kasutaja
+#   kasutaja:parool
+while IFS= read -r LINE || [[ -n "$LINE" ]]; do
+  # Eemalda alguse/lõpu tühikud
+  LINE="${LINE#"${LINE%%[![:space:]]*}"}"
+  LINE="${LINE%"${LINE##*[![:space:]]}"}"
+
+  # Tühjad read ja kommentaarid (#...) vahele
+  [[ -z "$LINE" ]] && continue
+  [[ "$LINE" =~ ^# ]] && continue
+
+  if [[ "$LINE" == *:* ]]; then
+    # Vorm: kasutaja:parool (lihtne tugi; paroolis koolon ei ole soovituslik)
+    USERNAME="${LINE%%:*}"
+    PASSWORD="${LINE#*:}"
+
+    # Eemalda võimalikud ümbristühikud
+    USERNAME="${USERNAME#"${USERNAME%%[![:space:]]*}"}"
+    USERNAME="${USERNAME%"${USERNAME##*[![:space:]]}"}"
+    PASSWORD="${PASSWORD#"${PASSWORD%%[![:space:]]*}"}"
+    PASSWORD="${PASSWORD%"${PASSWORD##*[![:space:]]}"}"
+
+    if [[ -z "$USERNAME" ]]; then
+      echo "Hoiatus: tühi kasutajanimi real: '$LINE' — jätan vahele." >&2
+      continue
+    fi
+
+    echo "Lisame kasutaja (parooliga): $USERNAME"
+    # loo kasutaja (lukustab parooli vastavalt lisa_kasutaja loogikale)
+    sudo ./lisa_kasutaja "$USERNAME" || { echo "Viga: kasutaja $USERNAME lisamine ebaõnnestus"; continue; }
+
+    # sea parool (chpasswd räsiab automaatselt /etc/login.defs järgi)
+    # NB! kui lisa_kasutaja tegi 'passwd -l', siis avame konto pärast parooli seadmist
+    if echo "$USERNAME:$PASSWORD" | sudo chpasswd; then
+      sudo passwd -u "$USERNAME" >/dev/null 2>&1 || true
+      echo "OK: parool seadistatud kasutajale $USERNAME"
+    else
+      echo "Viga: parooli seadmine ebaõnnestus kasutajale $USERNAME" >&2
+    fi
+
+  else
+    # Vorm: ainult kasutajanimi
+    USERNAME="$LINE"
+    echo "Lisame kasutaja (ilma paroolita): $USERNAME"
+    sudo ./lisa_kasutaja "$USERNAME" || echo "Viga: kasutaja $USERNAME lisamine ebaõnnestus"
+  fi
+
+done < "$FILE"
