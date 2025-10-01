@@ -1,0 +1,34 @@
+#!/bin/bash
+
+# kasutajad_failist - võtab parameetrina faili, kus iga rida on kasutajanimi,
+# ja loob need kasutajad, käivitades lisa_kasutaja skripti.
+
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "Kasutamine: $0 <failinimi>" >&2
+  exit 1
+fi
+
+FILE="$1"
+
+if [[ ! -f "$FILE" ]]; then
+  echo "Viga: faili '$FILE' ei leitud!" >&2
+  exit 2
+fi
+
+# Kontrollime, et lisa_kasutaja oleks PATH-is või samas kataloogis
+if ! command -v ./lisa_kasutaja >/dev/null 2>&1; then
+  echo "Viga: skripti 'lisa_kasutaja' ei leitud praegusest kataloogist." >&2
+  exit 3
+fi
+
+# Loeme kasutajanimed failist
+while IFS= read -r USERNAME; do
+  # jätame tühjad read ja kommentaarid (# algavad) vahele
+  [[ -z "$USERNAME" ]] && continue
+  [[ "$USERNAME" =~ ^# ]] && continue
+
+  echo "Lisame kasutaja: $USERNAME"
+  sudo ./lisa_kasutaja "$USERNAME" || echo "Viga: kasutaja $USERNAME lisamine ebaõnnestus"
+done < "$FILE"
