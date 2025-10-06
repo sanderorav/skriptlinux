@@ -7,7 +7,8 @@
 # 5) Failide ja kaustade välistamine (.jpg ja bin)
 # 6) „Kuiv jooks“
 # 7) Logimine
-# 8) Vaba ruumi kontroll (enne varundust)
+# 8) Vaba ruumi kontroll
+# 9) SHA-256 kontrollsumma arvutamine ja kontroll
 
 set -o errexit
 set -o nounset
@@ -20,8 +21,8 @@ LOG_FILE="$LOG_DIR/backup.log"
 
 DATE=$(date +%F_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/src-$DATE.tar.zst"
+CHECKSUM_FILE="$BACKUP_FILE.sha256"
 
-# Kaustad, et df saaks õigelt kettalt vaba ruumi lugeda
 mkdir -p "$BACKUP_DIR" "$LOG_DIR"
 
 # --- (6) KUIVJOOKS ---
@@ -34,10 +35,9 @@ if [[ "${1:-}" == "dry" ]]; then
   exit 0
 fi
 
-# --- (8) VABA RUUMI KONTROLL ENNE VARUNDUST ---
+# --- (8) VABA RUUMI KONTROLL ---
 SRC_BYTES=$(du -sb "$SRC_DIR" | awk '{print $1}')
 FREE_BYTES=$(df -B1 "$BACKUP_DIR" | awk 'NR==2{print $4}')
-
 REQUIRED_BYTES=$SRC_BYTES
 
 if (( FREE_BYTES < REQUIRED_BYTES )); then
@@ -101,11 +101,25 @@ if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '\.jpg$'; then
 else
   echo "Ühtegi .jpg faili ei leitud."
 fi
-
 if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/bin/'; then
   echo "Arhiivis on bin/ kaust — välistamine ei toiminud!"
 else
   echo "Kaust 'bin/' jäeti edukalt välja."
+fi
+
+# --- (9) SHA-256 KONTROLLSUMMA ---
+echo
+echo "Arvutan SHA-256 kontrollsumma..."
+sha256sum "$BACKUP_FILE" > "$CHECKSUM_FILE"
+echo "Kontrollsumma salvestatud faili: $CHECKSUM_FILE"
+
+echo "Kontrollin kontrollsumma vastavust:"
+if sha256sum -c "$CHECKSUM_FILE"; then
+  echo "Kontrollsumma vastab: OK"
+else
+  echo "Viga: kontrollsumma ei vasta!"
+  printf "[ %s ] BACKUP FAILED (checksum mismatch)\n" "$(date '+%F %T')" >> "$LOG_FILE"
+  exit 3
 fi
 
 # --- (7) LOGIMINE: lõpp ---
