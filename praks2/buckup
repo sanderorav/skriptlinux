@@ -1,5 +1,5 @@
 #!/bin/bash
-# Lihtne varukoopia skript (.tar.zst)
+# Lihtne varukoopia skript (.tar.zst / .tar.gz / .tar.xz)
 # 1) Varukoopia loomine (--exclude lisatud)
 # 2) Arhiivi kontrollimine
 # 3) Varukoopia suuruse kuvamine
@@ -8,7 +8,8 @@
 # 6) „Kuiv jooks“
 # 7) Logimine
 # 8) Vaba ruumi kontroll
-# 9) SHA-256 kontrollsumma arvutamine ja kontroll
+# 9) SHA-256 kontrollsumma
+# 10) Kompressori valik (zstd, gzip, xz)
 
 set -o errexit
 set -o nounset
@@ -20,8 +21,11 @@ LOG_DIR=~/skriptlinux/praks2/logs
 LOG_FILE="$LOG_DIR/backup.log"
 
 DATE=$(date +%F_%H%M%S)
-BACKUP_FILE="$BACKUP_DIR/src-$DATE.tar.zst"
-CHECKSUM_FILE="$BACKUP_FILE.sha256"
+
+# Failide nimed eri kompressoritega
+BACKUP_FILE_ZSTD="$BACKUP_DIR/src-$DATE.tar.zst"
+BACKUP_FILE_GZIP="$BACKUP_DIR/src-$DATE.tar.gz"
+BACKUP_FILE_XZ="$BACKUP_DIR/src-$DATE.tar.xz"
 
 mkdir -p "$BACKUP_DIR" "$LOG_DIR"
 
@@ -50,81 +54,71 @@ fi
 # --- (7) LOGIMINE: algus ---
 printf "[ %s ] BACKUP START\n" "$(date '+%F %T')" >> "$LOG_FILE"
 
-# --- (1) VARUKOOPIA LOOMINE ---
-echo "Loon varukoopia: $BACKUP_FILE"
-tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE" \
+# --- (10) KOMPRESSORI VALIK ---
+echo "Loon kolm varukoopiat eri kompressoritega..."
+echo
+
+# ZSTD (.tar.zst)
+echo "1. Pakkimine zstd-ga..."
+tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE_ZSTD" \
   --exclude='*.jpg' --exclude='bin' \
   -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
+echo "  -> Loodud: $BACKUP_FILE_ZSTD"
 
-if [ -f "$BACKUP_FILE" ]; then
-  echo "Varukoopia loodud: $BACKUP_FILE"
-else
-  echo "Viga: varukoopia loomine ebaõnnestus."
-  printf "[ %s ] BACKUP FAILED\n" "$(date '+%F %T')" >> "$LOG_FILE"
+# GZIP (.tar.gz)
+echo "2. Pakkimine gzip-iga..."
+tar -zcf "$BACKUP_FILE_GZIP" \
+  --exclude='*.jpg' --exclude='bin' \
+  -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
+echo "  -> Loodud: $BACKUP_FILE_GZIP"
+
+# XZ (.tar.xz)
+echo "3. Pakkimine xz-ga..."
+tar -Jcf "$BACKUP_FILE_XZ" \
+  --exclude='*.jpg' --exclude='bin' \
+  -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
+echo "  -> Loodud: $BACKUP_FILE_XZ"
+
+# Kontrolli, et failid on loodud
+if [ ! -f "$BACKUP_FILE_ZSTD" ] || [ ! -f "$BACKUP_FILE_GZIP" ] || [ ! -f "$BACKUP_FILE_XZ" ]; then
+  echo "Viga: mõne arhiivi loomine ebaõnnestus."
+  printf "[ %s ] BACKUP FAILED (compression error)\n" "$(date '+%F %T')" >> "$LOG_FILE"
   exit 1
 fi
 
-# --- (2) ARHIIVI KONTROLLIMINE ---
+# --- (9) SHA-256 KONTROLLSUMMA iga faili jaoks ---
 echo
-echo "Kontrollin arhiivi sisu (esimesed 5 rida):"
-tar -I 'zstd -d' -tf "$BACKUP_FILE" | head -n 5 >/dev/null || {
-  echo "Viga: arhiivi avamine ebaõnnestus."
-  printf "[ %s ] BACKUP FAILED\n" "$(date '+%F %T')" >> "$LOG_FILE"
-  exit 1
-}
+echo "Arvutan SHA-256 kontrollsummad..."
+for FILE in "$BACKUP_FILE_ZSTD" "$BACKUP_FILE_GZIP" "$BACKUP_FILE_XZ"; do
+  sha256sum "$FILE" > "$FILE.sha256"
+  if sha256sum -c "$FILE.sha256"; then
+    echo "$(basename "$FILE"): OK"
+  else
+    echo "Viga: $(basename "$FILE") kontrollsumma ei vasta!"
+    printf "[ %s ] BACKUP FAILED (checksum mismatch for %s)\n" \
+      "$(date '+%F %T')" "$(basename "$FILE")" >> "$LOG_FILE"
+    exit 3
+  fi
+done
 
-if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/.+/$'; then
-  echo "Arhiiv sisaldab alamkaustu."
-else
-  echo "Hoiatus: ei leidnud alamkaustu arhiivis."
-fi
-
-# --- (3) VARUKOOPIA SUURUS ---
+# --- (3) VARUKOOPIATE SUURUSED ---
 echo
-echo "Arhiivi suurus:"
-ARCHIVE_SIZE=$(du -h "$BACKUP_FILE" | awk '{print $1}')
-echo "$ARCHIVE_SIZE"
+echo "Varukoopiate suurused:"
+du -h "$BACKUP_FILE_ZSTD" "$BACKUP_FILE_GZIP" "$BACKUP_FILE_XZ" | awk '{print $2 ": " $1}'
 
-# --- (4) AINULT VIIMASED KOOPIAD ---
+# --- (4) AINULT VIIMASED KOOPIAD (3 komplekti jääb alles) ---
 echo
-echo "Puhastan vanu varukoopiaid (alles jäävad ainult 3 kõige uuemat)..."
+echo "Puhastan vanu varukoopiaid (alles jäävad ainult 3 komplekti)..."
 cd "$BACKUP_DIR"
-ls -1t *.tar.zst 2>/dev/null | tail -n +4 | xargs -r rm -f
-echo "Alles jäid järgmised failid:"
-ls -1t *.tar.zst || echo "(ühtegi varukoopiat pole)"
-
-# --- (5) VÄLISTAMISE KONTROLL ---
-echo
-echo "Kontrollin, et arhiivis poleks välistatud faile:"
-if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '\.jpg$'; then
-  echo "Arhiivis on .jpg faile — välistamine ei toiminud!"
-else
-  echo "Ühtegi .jpg faili ei leitud."
-fi
-if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/bin/'; then
-  echo "Arhiivis on bin/ kaust — välistamine ei toiminud!"
-else
-  echo "Kaust 'bin/' jäeti edukalt välja."
-fi
-
-# --- (9) SHA-256 KONTROLLSUMMA ---
-echo
-echo "Arvutan SHA-256 kontrollsumma..."
-sha256sum "$BACKUP_FILE" > "$CHECKSUM_FILE"
-echo "Kontrollsumma salvestatud faili: $CHECKSUM_FILE"
-
-echo "Kontrollin kontrollsumma vastavust:"
-if sha256sum -c "$CHECKSUM_FILE"; then
-  echo "Kontrollsumma vastab: OK"
-else
-  echo "Viga: kontrollsumma ei vasta!"
-  printf "[ %s ] BACKUP FAILED (checksum mismatch)\n" "$(date '+%F %T')" >> "$LOG_FILE"
-  exit 3
-fi
+ls -1t src-*.tar.zst 2>/dev/null | tail -n +4 | xargs -r rm -f
+ls -1t src-*.tar.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
+ls -1t src-*.tar.xz 2>/dev/null | tail -n +4 | xargs -r rm -f
+ls -1t src-*.sha256 2>/dev/null | tail -n +10 | xargs -r rm -f
+echo "Alles jäid:"
+ls -1t src-* | head -n 9 || echo "(ühtegi varukoopiat pole)"
 
 # --- (7) LOGIMINE: lõpp ---
-printf "[ %s ] BACKUP END (file: %s, size: %s)\n" \
-  "$(date '+%F %T')" "$(basename "$BACKUP_FILE")" "$ARCHIVE_SIZE" >> "$LOG_FILE"
+printf "[ %s ] BACKUP END (created 3 archives: zst, gz, xz)\n" "$(date '+%F %T')" >> "$LOG_FILE"
 
 echo
 echo "Logi salvestatud faili: $LOG_FILE"
