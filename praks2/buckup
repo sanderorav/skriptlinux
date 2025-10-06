@@ -1,5 +1,10 @@
 #!/bin/bash
-# Lihtne varukoopia skript (.tar.zst) + kontroll
+# Lihtne varukoopia skript (.tar.zst)
+# 1) Varukoopia loomine (--exclude lisatud)
+# 2) Arhiivi kontrollimine
+# 3) Varukoopia suuruse kuvamine
+# 4) Ainult viimased koopiad (3 tk jäetakse alles)
+# 5) Failide ja kaustade välistamine (.jpg ja bin)
 
 set -o errexit
 set -o nounset
@@ -17,7 +22,13 @@ BACKUP_FILE="$BACKUP_DIR/src-$DATE.tar.zst"
 mkdir -p "$BACKUP_DIR"
 
 echo "Loon varukoopia: $BACKUP_FILE"
-tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE" -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
+
+# --- (1) VARUKOOPIA LOOMINE ---
+# Lisatud välistused: ära paki .jpg faile ja bin kausta
+tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE" \
+    --exclude='*.jpg' \
+    --exclude='bin' \
+    -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
 
 # Kontrolli, et fail on olemas
 if [ -f "$BACKUP_FILE" ]; then
@@ -30,16 +41,13 @@ fi
 # --- (2) ARHIIVI KONTROLLIMINE ---
 echo
 echo "Kontrollin arhiivi sisu (esimesed 5 rida):"
-# Näita sisu, kasutades zstd lahtipakkimist, ja piira väljund 5 reale
 if ! tar -I 'zstd -d' -tf "$BACKUP_FILE" | head -n 5; then
     echo "Viga: arhiivi avamine ebaõnnestus."
     exit 1
 fi
 
-# Kontroll: kas arhiiv sisaldab alamkaustu (nt src/docs/, src/imgs/ jms)
-# GNU tar märgib kataloogid lõpus kaldkriipsuga (/)
 if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/.+/$'; then
-    echo "Arhiiv sisaldab alamkaustu."
+    echo "Arhiiv sisaldab alamkaustu (nt src/docs/, src/imgs/ jne)."
 else
     echo "Hoiatus: ei leidnud alamkaustu arhiivis."
 fi
@@ -49,3 +57,27 @@ echo
 echo "Arhiivi suurus:"
 ARCHIVE_SIZE=$(du -h "$BACKUP_FILE" | awk '{print $1}')
 echo "$ARCHIVE_SIZE"
+
+# --- (4) AINULT VIIMASED KOOPIAD ---
+echo
+echo "Puhastan vanu varukoopiaid (alles jäävad ainult 3 kõige uuemat)..."
+cd "$BACKUP_DIR"
+ls -1t *.tar.zst 2>/dev/null | tail -n +4 | xargs -r rm -f
+
+echo "Alles jäid järgmised failid:"
+ls -1t *.tar.zst || echo "(ühtegi varukoopiat pole)"
+
+# --- (5) FAILIDE JA KAUSTADE VÄLISTAMISE KONTROLL ---
+echo
+echo "Kontrollin, et arhiivis poleks välistatud faile:"
+if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '\.jpg$'; then
+    echo "Arhiivis on .jpg faile — välistamine ei toiminud!"
+else
+    echo "Ühtegi .jpg faili ei leitud."
+fi
+
+if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/bin/'; then
+    echo "Arhiivis on bin/ kaust — välistamine ei toiminud!"
+else
+    echo "Kaust 'bin/' jäeti edukalt välja."
+fi
