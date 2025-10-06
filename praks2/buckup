@@ -5,39 +5,46 @@
 # 3) Varukoopia suuruse kuvamine
 # 4) Ainult viimased koopiad (3 tk jäetakse alles)
 # 5) Failide ja kaustade välistamine (.jpg ja bin)
-# 6) „Kuiv jooks“ – näita, mis läheks arhiivi, ilma et faili tegelikult luuakse
-# 7) Logimine – salvestab alguse ja lõpu backup.log faili
+# 6) „Kuiv jooks“
+# 7) Logimine
+# 8) Vaba ruumi kontroll (enne varundust)
 
 set -o errexit
 set -o nounset
 set -o pipefail
 
-# Lähte- ja sihtkaustad
 SRC_DIR=~/skriptlinux/praks2/src
 BACKUP_DIR=~/skriptlinux/praks2/backup
 LOG_DIR=~/skriptlinux/praks2/logs
 LOG_FILE="$LOG_DIR/backup.log"
 
-# Failinimi koos kuupäeva ja kellaajaga
 DATE=$(date +%F_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/src-$DATE.tar.zst"
 
-# Loo vajalikud kaustad
+# Kaustad, et df saaks õigelt kettalt vaba ruumi lugeda
 mkdir -p "$BACKUP_DIR" "$LOG_DIR"
 
-# --- (6) KUIVJOOKS (Dry Run) ---
+# --- (6) KUIVJOOKS ---
 if [[ "${1:-}" == "dry" ]]; then
-    echo "KUIVJOOKS: Näitan, mis failid läheks arhiivi (arhiivi ei looda)."
-    echo
-    echo "Arhiiv sisaldaks järgmisi faile ja kaustu:"
-    tar -cf - \
-        --exclude='*.jpg' \
-        --exclude='bin' \
-        -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")" \
-        | tar -tvf -
-    echo
-    echo "Kuiv jooks lõpetatud — uut faili ei loodud."
-    exit 0
+  echo "KUIVJOOKS: Näitan, mis failid läheks arhiivi (arhiivi ei looda)."
+  tar -cf - --exclude='*.jpg' --exclude='bin' \
+      -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")" \
+    | tar -tvf -
+  echo "Kuiv jooks lõpetatud — uut faili ei loodud."
+  exit 0
+fi
+
+# --- (8) VABA RUUMI KONTROLL ENNE VARUNDUST ---
+SRC_BYTES=$(du -sb "$SRC_DIR" | awk '{print $1}')
+FREE_BYTES=$(df -B1 "$BACKUP_DIR" | awk 'NR==2{print $4}')
+
+REQUIRED_BYTES=$SRC_BYTES
+
+if (( FREE_BYTES < REQUIRED_BYTES )); then
+  echo "Viga: vaba ruumi on liiga vähe (vajalik: ${REQUIRED_BYTES} B, vaba: ${FREE_BYTES} B). Varundust ei käivitata."
+  printf "[ %s ] BACKUP ABORT (not enough space: need %sB, free %sB)\n" \
+    "$(date '+%F %T')" "$REQUIRED_BYTES" "$FREE_BYTES" >> "$LOG_FILE"
+  exit 2
 fi
 
 # --- (7) LOGIMINE: algus ---
@@ -46,31 +53,30 @@ printf "[ %s ] BACKUP START\n" "$(date '+%F %T')" >> "$LOG_FILE"
 # --- (1) VARUKOOPIA LOOMINE ---
 echo "Loon varukoopia: $BACKUP_FILE"
 tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE" \
-    --exclude='*.jpg' \
-    --exclude='bin' \
-    -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
+  --exclude='*.jpg' --exclude='bin' \
+  -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
 
 if [ -f "$BACKUP_FILE" ]; then
-    echo "Varukoopia loodud: $BACKUP_FILE"
+  echo "Varukoopia loodud: $BACKUP_FILE"
 else
-    echo "Viga: varukoopia loomine ebaõnnestus."
-    printf "[ %s ] BACKUP FAILED\n" "$(date '+%F %T')" >> "$LOG_FILE"
-    exit 1
+  echo "Viga: varukoopia loomine ebaõnnestus."
+  printf "[ %s ] BACKUP FAILED\n" "$(date '+%F %T')" >> "$LOG_FILE"
+  exit 1
 fi
 
 # --- (2) ARHIIVI KONTROLLIMINE ---
 echo
 echo "Kontrollin arhiivi sisu (esimesed 5 rida):"
-if ! tar -I 'zstd -d' -tf "$BACKUP_FILE" | head -n 5; then
-    echo "Viga: arhiivi avamine ebaõnnestus."
-    printf "[ %s ] BACKUP FAILED\n" "$(date '+%F %T')" >> "$LOG_FILE"
-    exit 1
-fi
+tar -I 'zstd -d' -tf "$BACKUP_FILE" | head -n 5 >/dev/null || {
+  echo "Viga: arhiivi avamine ebaõnnestus."
+  printf "[ %s ] BACKUP FAILED\n" "$(date '+%F %T')" >> "$LOG_FILE"
+  exit 1
+}
 
 if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/.+/$'; then
-    echo "Arhiiv sisaldab alamkaustu."
+  echo "Arhiiv sisaldab alamkaustu."
 else
-    echo "Hoiatus: ei leidnud alamkaustu arhiivis."
+  echo "Hoiatus: ei leidnud alamkaustu arhiivis."
 fi
 
 # --- (3) VARUKOOPIA SUURUS ---
@@ -87,24 +93,24 @@ ls -1t *.tar.zst 2>/dev/null | tail -n +4 | xargs -r rm -f
 echo "Alles jäid järgmised failid:"
 ls -1t *.tar.zst || echo "(ühtegi varukoopiat pole)"
 
-# --- (5) FAILIDE JA KAUSTADE VÄLISTAMISE KONTROLL ---
+# --- (5) VÄLISTAMISE KONTROLL ---
 echo
 echo "Kontrollin, et arhiivis poleks välistatud faile:"
 if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '\.jpg$'; then
-    echo "Arhiivis on .jpg faile — välistamine ei toiminud!"
+  echo "Arhiivis on .jpg faile — välistamine ei toiminud!"
 else
-    echo "Ühtegi .jpg faili ei leitud."
+  echo "Ühtegi .jpg faili ei leitud."
 fi
 
 if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/bin/'; then
-    echo "Arhiivis on bin/ kaust — välistamine ei toiminud!"
+  echo "Arhiivis on bin/ kaust — välistamine ei toiminud!"
 else
-    echo "Kaust 'bin/' jäeti edukalt välja."
+  echo "Kaust 'bin/' jäeti edukalt välja."
 fi
 
 # --- (7) LOGIMINE: lõpp ---
 printf "[ %s ] BACKUP END (file: %s, size: %s)\n" \
-    "$(date '+%F %T')" "$(basename "$BACKUP_FILE")" "$ARCHIVE_SIZE" >> "$LOG_FILE"
+  "$(date '+%F %T')" "$(basename "$BACKUP_FILE")" "$ARCHIVE_SIZE" >> "$LOG_FILE"
 
 echo
 echo "Logi salvestatud faili: $LOG_FILE"
