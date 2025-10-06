@@ -1,5 +1,9 @@
 #!/bin/bash
-# Lihtne varukoopia skript (.tar.zst)
+# Lihtne varukoopia skript (.tar.zst) + kontroll
+
+set -o errexit
+set -o nounset
+set -o pipefail
 
 # Lähte- ja sihtkaustad
 SRC_DIR=~/skriptlinux/praks2/src
@@ -7,18 +11,35 @@ BACKUP_DIR=~/skriptlinux/praks2/backup
 
 # Failinimi koos kuupäeva ja kellaajaga
 DATE=$(date +%F_%H%M%S)
-BACKUP_FILE=$BACKUP_DIR/src-$DATE.tar.zst
+BACKUP_FILE="$BACKUP_DIR/src-$DATE.tar.zst"
 
-# Loo kaust
-mkdir -p ~/skriptlinux/praks2/backup
+# Loo sihtkaust
+mkdir -p "$BACKUP_DIR"
 
-# Loo varukoopia
+echo "Loon varukoopia: $BACKUP_FILE"
 tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE" -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
 
-# Kontrolli tulemust
+# Kontrolli, et fail on olemas
 if [ -f "$BACKUP_FILE" ]; then
     echo "Varukoopia loodud: $BACKUP_FILE"
 else
     echo "Viga: varukoopia loomine ebaõnnestus."
     exit 1
+fi
+
+# --- (2) ARHIIVI KONTROLLIMINE ---
+echo
+echo "Kontrollin arhiivi sisu (esimesed 5 rida):"
+# Näita sisu, kasutades zstd lahtipakkimist, ja piira väljund 5 reale
+if ! tar -I 'zstd -d' -tf "$BACKUP_FILE" | head -n 5; then
+    echo "Viga: arhiivi avamine ebaõnnestus."
+    exit 1
+fi
+
+# Kontroll: kas arhiiv sisaldab alamkaustu (nt src/docs/, src/imgs/ jms)
+# GNU tar märgib kataloogid lõpus kaldkriipsuga (/)
+if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/.+/$'; then
+    echo "Arhiiv sisaldab alamkaustu."
+else
+    echo "Hoiatus: ei leidnud alamkaustu arhiivis."
 fi
