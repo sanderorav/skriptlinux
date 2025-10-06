@@ -1,0 +1,24 @@
+#!/bin/bash
+# Lihtne varukoopia skript (.tar.zst)
+
+# Lähte- ja sihtkaustad
+SRC_DIR=~/skriptlinux/praks2/src
+BACKUP_DIR=~/skriptlinux/praks2/backup
+
+# Failinimi koos kuupäeva ja kellaajaga
+DATE=$(date +%F_%H%M%S)
+BACKUP_FILE=$BACKUP_DIR/src-$DATE.tar.zst
+
+# Loo kaust
+mkdir -p ~/skriptlinux/praks2/backup
+
+# Loo varukoopia
+tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE" -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
+
+# Kontrolli tulemust
+if [ -f "$BACKUP_FILE" ]; then
+    echo "Varukoopia loodud: $BACKUP_FILE"
+else
+    echo "Viga: varukoopia loomine ebaõnnestus."
+    exit 1
+fi
