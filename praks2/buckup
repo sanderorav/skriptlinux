@@ -6,6 +6,7 @@
 # 4) Ainult viimased koopiad (3 tk jäetakse alles)
 # 5) Failide ja kaustade välistamine (.jpg ja bin)
 # 6) „Kuiv jooks“ – näita, mis läheks arhiivi, ilma et faili tegelikult luuakse
+# 7) Logimine – salvestab alguse ja lõpu backup.log faili
 
 set -o errexit
 set -o nounset
@@ -14,18 +15,21 @@ set -o pipefail
 # Lähte- ja sihtkaustad
 SRC_DIR=~/skriptlinux/praks2/src
 BACKUP_DIR=~/skriptlinux/praks2/backup
+LOG_DIR=~/skriptlinux/praks2/logs
+LOG_FILE="$LOG_DIR/backup.log"
 
 # Failinimi koos kuupäeva ja kellaajaga
 DATE=$(date +%F_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/src-$DATE.tar.zst"
 
+# Loo vajalikud kaustad
+mkdir -p "$BACKUP_DIR" "$LOG_DIR"
+
 # --- (6) KUIVJOOKS (Dry Run) ---
-# Kui skripti käivitada argumendiga 'dry', tehakse ainult test-run
 if [[ "${1:-}" == "dry" ]]; then
     echo "KUIVJOOKS: Näitan, mis failid läheks arhiivi (arhiivi ei looda)."
     echo
     echo "Arhiiv sisaldaks järgmisi faile ja kaustu:"
-    # Näita ainult nimekirja – arhiivi ei teki
     tar -cf - \
         --exclude='*.jpg' \
         --exclude='bin' \
@@ -36,20 +40,21 @@ if [[ "${1:-}" == "dry" ]]; then
     exit 0
 fi
 
-# --- (1) VARUKOOPIA LOOMINE ---
-mkdir -p "$BACKUP_DIR"
+# --- (7) LOGIMINE: algus ---
+printf "[ %s ] BACKUP START\n" "$(date '+%F %T')" >> "$LOG_FILE"
 
+# --- (1) VARUKOOPIA LOOMINE ---
 echo "Loon varukoopia: $BACKUP_FILE"
 tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE" \
     --exclude='*.jpg' \
     --exclude='bin' \
     -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
 
-# Kontrolli, et fail on olemas
 if [ -f "$BACKUP_FILE" ]; then
     echo "Varukoopia loodud: $BACKUP_FILE"
 else
     echo "Viga: varukoopia loomine ebaõnnestus."
+    printf "[ %s ] BACKUP FAILED\n" "$(date '+%F %T')" >> "$LOG_FILE"
     exit 1
 fi
 
@@ -58,11 +63,12 @@ echo
 echo "Kontrollin arhiivi sisu (esimesed 5 rida):"
 if ! tar -I 'zstd -d' -tf "$BACKUP_FILE" | head -n 5; then
     echo "Viga: arhiivi avamine ebaõnnestus."
+    printf "[ %s ] BACKUP FAILED\n" "$(date '+%F %T')" >> "$LOG_FILE"
     exit 1
 fi
 
 if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/.+/$'; then
-    echo "Arhiiv sisaldab alamkaustu (nt src/docs/, src/imgs/ jne)."
+    echo "Arhiiv sisaldab alamkaustu."
 else
     echo "Hoiatus: ei leidnud alamkaustu arhiivis."
 fi
@@ -78,7 +84,6 @@ echo
 echo "Puhastan vanu varukoopiaid (alles jäävad ainult 3 kõige uuemat)..."
 cd "$BACKUP_DIR"
 ls -1t *.tar.zst 2>/dev/null | tail -n +4 | xargs -r rm -f
-
 echo "Alles jäid järgmised failid:"
 ls -1t *.tar.zst || echo "(ühtegi varukoopiat pole)"
 
@@ -96,3 +101,10 @@ if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/bin/'; then
 else
     echo "Kaust 'bin/' jäeti edukalt välja."
 fi
+
+# --- (7) LOGIMINE: lõpp ---
+printf "[ %s ] BACKUP END (file: %s, size: %s)\n" \
+    "$(date '+%F %T')" "$(basename "$BACKUP_FILE")" "$ARCHIVE_SIZE" >> "$LOG_FILE"
+
+echo
+echo "Logi salvestatud faili: $LOG_FILE"
