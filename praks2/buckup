@@ -43,3 +43,9 @@ if tar -I 'zstd -d' -tf "$BACKUP_FILE" | grep -qE '^src/.+/$'; then
 else
     echo "Hoiatus: ei leidnud alamkaustu arhiivis."
 fi
+
+# --- (3) VARUKOOPIA SUURUS ---
+echo
+echo "Arhiivi suurus:"
+ARCHIVE_SIZE=$(du -h "$BACKUP_FILE" | awk '{print $1}')
+echo "$ARCHIVE_SIZE"
