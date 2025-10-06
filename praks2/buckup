@@ -5,6 +5,7 @@
 # 3) Varukoopia suuruse kuvamine
 # 4) Ainult viimased koopiad (3 tk jäetakse alles)
 # 5) Failide ja kaustade välistamine (.jpg ja bin)
+# 6) „Kuiv jooks“ – näita, mis läheks arhiivi, ilma et faili tegelikult luuakse
 
 set -o errexit
 set -o nounset
@@ -18,13 +19,27 @@ BACKUP_DIR=~/skriptlinux/praks2/backup
 DATE=$(date +%F_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/src-$DATE.tar.zst"
 
-# Loo sihtkaust
+# --- (6) KUIVJOOKS (Dry Run) ---
+# Kui skripti käivitada argumendiga 'dry', tehakse ainult test-run
+if [[ "${1:-}" == "dry" ]]; then
+    echo "KUIVJOOKS: Näitan, mis failid läheks arhiivi (arhiivi ei looda)."
+    echo
+    echo "Arhiiv sisaldaks järgmisi faile ja kaustu:"
+    # Näita ainult nimekirja – arhiivi ei teki
+    tar -cf - \
+        --exclude='*.jpg' \
+        --exclude='bin' \
+        -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")" \
+        | tar -tvf -
+    echo
+    echo "Kuiv jooks lõpetatud — uut faili ei loodud."
+    exit 0
+fi
+
+# --- (1) VARUKOOPIA LOOMINE ---
 mkdir -p "$BACKUP_DIR"
 
 echo "Loon varukoopia: $BACKUP_FILE"
-
-# --- (1) VARUKOOPIA LOOMINE ---
-# Lisatud välistused: ära paki .jpg faile ja bin kausta
 tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE" \
     --exclude='*.jpg' \
     --exclude='bin' \
