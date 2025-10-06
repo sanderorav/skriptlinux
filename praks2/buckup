@@ -10,6 +10,7 @@
 # 8) Vaba ruumi kontroll
 # 9) SHA-256 kontrollsumma
 # 10) Kompressori valik (zstd, gzip, xz)
+# 11) .backupignore kasutamine (välistuste fail)
 
 set -o errexit
 set -o nounset
@@ -27,12 +28,21 @@ BACKUP_FILE_ZSTD="$BACKUP_DIR/src-$DATE.tar.zst"
 BACKUP_FILE_GZIP="$BACKUP_DIR/src-$DATE.tar.gz"
 BACKUP_FILE_XZ="$BACKUP_DIR/src-$DATE.tar.xz"
 
+# .backupignore fail
+IGNORE_FILE="$SRC_DIR/.backupignore"
+
 mkdir -p "$BACKUP_DIR" "$LOG_DIR"
 
 # --- (6) KUIVJOOKS ---
 if [[ "${1:-}" == "dry" ]]; then
   echo "KUIVJOOKS: Näitan, mis failid läheks arhiivi (arhiivi ei looda)."
-  tar -cf - --exclude='*.jpg' --exclude='bin' \
+  IGNORE_OPT=()
+  if [ -f "$IGNORE_FILE" ]; then
+    echo "Kasutatakse välistusfaili: $IGNORE_FILE"
+    IGNORE_OPT=(--exclude-from="$IGNORE_FILE")
+  fi
+  tar -cf - "${IGNORE_OPT[@]}" \
+      --exclude='*.jpg' --exclude='bin' \
       -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")" \
     | tar -tvf -
   echo "Kuiv jooks lõpetatud — uut faili ei loodud."
@@ -54,6 +64,16 @@ fi
 # --- (7) LOGIMINE: algus ---
 printf "[ %s ] BACKUP START\n" "$(date '+%F %T')" >> "$LOG_FILE"
 
+# --- (11) .backupignore kontroll ---
+IGNORE_OPT=()
+if [ -f "$IGNORE_FILE" ]; then
+  echo "Leitud välistusfail: $IGNORE_FILE"
+  echo "Kasutatakse failis määratud välistusi."
+  IGNORE_OPT=(--exclude-from="$IGNORE_FILE")
+else
+  echo "Faili .backupignore ei leitud — kasutatakse vaikimisi välistusi."
+fi
+
 # --- (10) KOMPRESSORI VALIK ---
 echo "Loon kolm varukoopiat eri kompressoritega..."
 echo
@@ -61,6 +81,7 @@ echo
 # ZSTD (.tar.zst)
 echo "1. Pakkimine zstd-ga..."
 tar -I 'zstd -19 -T0' -cf "$BACKUP_FILE_ZSTD" \
+  "${IGNORE_OPT[@]}" \
   --exclude='*.jpg' --exclude='bin' \
   -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
 echo "  -> Loodud: $BACKUP_FILE_ZSTD"
@@ -68,6 +89,7 @@ echo "  -> Loodud: $BACKUP_FILE_ZSTD"
 # GZIP (.tar.gz)
 echo "2. Pakkimine gzip-iga..."
 tar -zcf "$BACKUP_FILE_GZIP" \
+  "${IGNORE_OPT[@]}" \
   --exclude='*.jpg' --exclude='bin' \
   -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
 echo "  -> Loodud: $BACKUP_FILE_GZIP"
@@ -75,6 +97,7 @@ echo "  -> Loodud: $BACKUP_FILE_GZIP"
 # XZ (.tar.xz)
 echo "3. Pakkimine xz-ga..."
 tar -Jcf "$BACKUP_FILE_XZ" \
+  "${IGNORE_OPT[@]}" \
   --exclude='*.jpg' --exclude='bin' \
   -C "$(dirname "$SRC_DIR")" "$(basename "$SRC_DIR")"
 echo "  -> Loodud: $BACKUP_FILE_XZ"
